@@ -1,3 +1,8 @@
+# Forked with PR's
+
+* feat(split): allow central to connect to multiple peripherals ([#836](https://github.com/zmkfirmware/zmk/pull/836))
+* Adds automatic disabling of backlight if the keyboard is idle ([#1179](https://github.com/zmkfirmware/zmk/pull/1179))
+
 # Zephyr™ Mechanical Keyboard (ZMK) Firmware
 
 [![Discord](https://img.shields.io/discord/719497620560543766)](https://zmk.dev/community/discord/invite)
