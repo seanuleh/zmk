@@ -17,6 +17,9 @@
 #include <zephyr/drivers/led_strip.h>
 #include <drivers/ext_power.h>
 
+#include <zmk/event_manager.h>
+#include <zmk/events/activity_state_changed.h>
+
 #include <zmk/rgb_underglow.h>
 
 #include <zmk/activity.h>
@@ -297,7 +300,8 @@ int zmk_rgb_underglow_get_state(bool *on_off) {
     return 0;
 }
 
-int zmk_rgb_underglow_on(void) {
+// Enables underglow LEDs and underglow_tick, but doesn't update state
+int zmk_rgb_underglow_resume() {
     if (!led_strip)
         return -ENODEV;
 
@@ -310,24 +314,22 @@ int zmk_rgb_underglow_on(void) {
     }
 #endif
 
+    k_timer_start(&underglow_tick, K_NO_WAIT, K_MSEC(50));
+
+    return 0;
+}
+
+int zmk_rgb_underglow_on() {
+    zmk_rgb_underglow_resume();
+
     state.on = true;
     state.animation_step = 0;
-    k_timer_start(&underglow_tick, K_NO_WAIT, K_MSEC(50));
 
     return zmk_rgb_underglow_save_state();
 }
 
-static void zmk_rgb_underglow_off_handler(struct k_work *work) {
-    for (int i = 0; i < STRIP_NUM_PIXELS; i++) {
-        pixels[i] = (struct led_rgb){r : 0, g : 0, b : 0};
-    }
-
-    led_strip_update_rgb(led_strip, pixels, STRIP_NUM_PIXELS);
-}
-
-K_WORK_DEFINE(underglow_off_work, zmk_rgb_underglow_off_handler);
-
-int zmk_rgb_underglow_off(void) {
+// Disables underglow LEDs and underglow_tick, but doesn't update state
+int zmk_rgb_underglow_pause() {
     if (!led_strip)
         return -ENODEV;
 
@@ -343,10 +345,46 @@ int zmk_rgb_underglow_off(void) {
     k_work_submit_to_queue(zmk_workqueue_lowprio_work_q(), &underglow_off_work);
 
     k_timer_stop(&underglow_tick);
+
+    return 0;
+}
+
+int zmk_rgb_underglow_off() {
+    zmk_rgb_underglow_pause();
+
     state.on = false;
 
     return zmk_rgb_underglow_save_state();
 }
+
+#if IS_ENABLED(CONFIG_ZMK_RGB_UNDERGLOW_AUTO_OFF_IDLE)
+static int zmk_rgb_underglow_event_listener(const zmk_event_t *eh) {
+
+    if (state.on == true) {
+        struct zmk_activity_state_changed *ev = as_zmk_activity_state_changed(eh);
+        if (ev == NULL) {
+            return -ENOTSUP;
+        }
+
+        switch (ev->state) {
+            case ZMK_ACTIVITY_ACTIVE:
+                zmk_rgb_underglow_resume();
+                break;
+            case ZMK_ACTIVITY_IDLE:
+            case ZMK_ACTIVITY_SLEEP:
+                zmk_rgb_underglow_pause();
+                break;
+            default:
+                LOG_WRN("Unhandled activity state: %d", ev->state);
+                return -EINVAL;
+        }
+    }
+    return 0;
+}
+
+ZMK_LISTENER(rgb_underglow, zmk_rgb_underglow_event_listener);
+ZMK_SUBSCRIPTION(rgb_underglow, zmk_activity_state_changed);
+#endif // IS_ENABLED(CONFIG_ZMK_RGB_UNDERGLOW_AUTO_OFF_IDLE)
 
 int zmk_rgb_underglow_calc_effect(int direction) {
     return (state.current_effect + UNDERGLOW_EFFECT_NUMBER + direction) % UNDERGLOW_EFFECT_NUMBER;

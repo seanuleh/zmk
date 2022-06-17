@@ -603,7 +603,7 @@ static void split_central_process_connection(struct bt_conn *conn) {
     start_scanning();
 }
 
-static int stop_scanning(void) {
+static int stop_scanning() {
     LOG_DBG("Stopping peripheral scanning");
     is_scanning = false;
 
@@ -619,26 +619,22 @@ static int stop_scanning(void) {
 static bool split_central_eir_found(const bt_addr_le_t *addr) {
     LOG_DBG("Found the split service");
 
-    // Reserve peripheral slot. Once the central has bonded to its peripherals,
-    // the peripheral MAC addresses will be validated internally and the slot
-    // reservation will fail if there is a mismatch.
-    int slot_idx = reserve_peripheral_slot(addr);
-    if (slot_idx < 0) {
-        LOG_INF("Unable to reserve peripheral slot (err %d)", slot_idx);
-        return false;
-    }
-    struct peripheral_slot *slot = &peripherals[slot_idx];
-
     // Stop scanning so we can connect to the peripheral device.
     int err = stop_scanning();
     if (err < 0) {
         return false;
     }
 
-    LOG_DBG("Initiating new connection");
-    struct bt_le_conn_param *param =
-        BT_LE_CONN_PARAM(CONFIG_ZMK_SPLIT_BLE_PREF_INT, CONFIG_ZMK_SPLIT_BLE_PREF_INT,
-                         CONFIG_ZMK_SPLIT_BLE_PREF_LATENCY, CONFIG_ZMK_SPLIT_BLE_PREF_TIMEOUT);
+    int slot_idx = reserve_peripheral_slot(addr);
+    if (slot_idx < 0) {
+        LOG_ERR("Failed to reserve peripheral slot (err %d)", slot_idx);
+        return false;
+    }
+
+    struct peripheral_slot *slot = &peripherals[slot_idx];
+
+    LOG_DBG("Initiating new connnection");
+    struct bt_le_conn_param *param = BT_LE_CONN_PARAM(0x0006, 0x0006, 30, 400);
     err = bt_conn_le_create(addr, BT_CONN_LE_CREATE_CONN, param, &slot->conn);
     if (err < 0) {
         LOG_ERR("Create conn failed (err %d) (create conn? 0x%04x)", err, BT_HCI_OP_LE_CREATE_CONN);
@@ -697,10 +693,8 @@ static void split_central_device_found(const bt_addr_le_t *addr, int8_t rssi, ui
     LOG_DBG("[DEVICE]: %s, AD evt type %u, AD data len %u, RSSI %i", dev, type, ad->len, rssi);
 
     /* We're only interested in connectable events */
-    if (type == BT_GAP_ADV_TYPE_ADV_IND) {
+    if (type == BT_GAP_ADV_TYPE_ADV_IND || type == BT_GAP_ADV_TYPE_ADV_DIRECT_IND) {
         bt_data_parse(ad, split_central_eir_parse, (void *)addr);
-    } else if (type == BT_GAP_ADV_TYPE_ADV_DIRECT_IND) {
-        split_central_eir_found(addr);
     }
 }
 
@@ -786,26 +780,6 @@ static void split_central_disconnected(struct bt_conn *conn, uint8_t reason) {
     }
 
     start_scanning();
-}
-
-static void split_central_security_changed(struct bt_conn *conn, bt_security_t level,
-                                           enum bt_security_err err) {
-    struct peripheral_slot *slot = peripheral_slot_for_conn(conn);
-    if (!slot || !slot->selected_physical_layout_handle) {
-        return;
-    }
-
-    if (err > 0) {
-        LOG_DBG("Skipping updating the physical layout for peripheral with security error");
-        return;
-    }
-
-    if (level < BT_SECURITY_L2) {
-        LOG_DBG("Skipping updating the physical layout for peripheral with insufficient security");
-        return;
-    }
-
-    k_work_submit(&update_peripherals_selected_layouts_work);
 }
 
 static struct bt_conn_cb conn_callbacks = {
@@ -959,12 +933,7 @@ static int zmk_split_bt_central_init(void) {
                        CONFIG_ZMK_BLE_THREAD_PRIORITY, NULL);
     bt_conn_cb_register(&conn_callbacks);
 
-#if IS_ENABLED(CONFIG_SETTINGS)
-    settings_register(&ble_central_settings_handler);
-    return 0;
-#else
-    return finish_init();
-#endif // IS_ENABLED(CONFIG_SETTINGS)
+    return start_scanning();
 }
 
 SYS_INIT(zmk_split_bt_central_init, APPLICATION, CONFIG_ZMK_BLE_INIT_PRIORITY);
